@@ -86,7 +86,11 @@ runs:
                 if [[ "${fnnas_filename}" =~ ^/ ]]; then
                     cp -vf ${fnnas_filename} ${fnnas_savepath}/ || true
                 else
-                    cp -vf ${{ github.workspace }}/${fnnas_filename} ${fnnas_savepath}/ || true
+                    # Try multiple paths to find the fnnas file
+                    cp -vf ${fnnas_filename} ${fnnas_savepath}/ || \
+                    cp -vf ${{ github.workspace }}/${fnnas_filename} ${fnnas_savepath}/ || \
+                    cp -vf /builder/${fnnas_filename} ${fnnas_savepath}/ || \
+                    cp -vf /builder/fnnas/${fnnas_savefile} ${fnnas_savepath}/ || true
                 fi
             else
                 echo -e "The [ ${fnnas_savepath}/${fnnas_savefile} ] file already exists, skipping."
