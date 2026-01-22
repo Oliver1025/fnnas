@@ -122,22 +122,63 @@ runs:
             cd ${{ github.action_path }}
             echo -e "Start to make fnnas..."
             
-            # Check if renas script exists, if not, try to find it
-            if [[ ! -x ./renas ]]; then
+            # The renas script should be in the current directory
+            # If not, check multiple locations including the repository root
+            if [[ ! -f ./renas ]]; then
                 echo -e "Looking for renas script..."
-                # Try to find renas script in common locations
-                if [[ -x ${{ github.workspace }}/renas ]]; then
-                    cp -vf ${{ github.workspace }}/renas ./renas
-                    cp -vf ${{ github.workspace }}/rekernel ./rekernel
-                    chmod +x ./renas ./rekernel
-                elif [[ -x /builder/renas ]]; then
-                    cp -vf /builder/renas ./renas
-                    cp -vf /builder/rekernel ./rekernel
-                    chmod +x ./renas ./rekernel
-                else
+                
+                # Define search locations
+                search_locations=(
+                    "./renas"  # Current directory first
+                    "../renas"  # Parent directory
+                    "${{ github.workspace }}/renas"  # GitHub workspace
+                    "/home/runner/work/${{ github.repository }}/main/renas"  # Repository root
+                    "/home/runner/work/${{ github.repository }}/${{ github.ref_name }}/renas"  # Branch-specific root
+                    "/home/runner/work/${{ github.repository }}/renas"  # Repository root alternative
+                    "./fnnas/renas"  # fnnas subdirectory
+                    "/builder/renas"  # Builder directory
+                    "/home/runner/work/fnnas/renas"  # Common workflow path
+                )
+                
+                found=false
+                for location in "${search_locations[@]}"; do
+                    if [[ -f "$location" ]]; then
+                        # Extract directory from the location
+                        dir="$(dirname "$location")"
+                        cp -vf "$location" ./renas
+                        # Check if rekernel exists in the same directory
+                        if [[ -f "$dir/rekernel" ]]; then
+                            cp -vf "$dir/rekernel" ./rekernel
+                        else
+                            echo -e "Warning: rekernel not found in $dir, searching separately..."
+                            # Search for rekernel in all locations
+                            for rekernel_loc in "${search_locations[@]}"; do
+                                rekernel_full="$(dirname "$rekernel_loc")/rekernel"
+                                if [[ -f "$rekernel_full" ]]; then
+                                    cp -vf "$rekernel_full" ./rekernel
+                                    break
+                                fi
+                            done
+                        fi
+                        # Always make scripts executable, regardless of original permissions
+                        chmod +x ./renas ./rekernel
+                        echo "Found in: $location"
+                        found=true
+                        break
+                    fi
+                done
+                
+                if [[ $found == false ]]; then
                     echo -e "Error: renas script not found!"
+                    echo -e "Searched in:"
+                    for location in "${search_locations[@]}"; do
+                        echo "  - $location"
+                    done
                     exit 1
                 fi
+            else
+                # If renas already exists, ensure it's executable
+                chmod +x ./renas ./rekernel
             fi
             
             make_command=""
