@@ -1,0 +1,224 @@
+name: "Make Fnnas"
+author: "https://github.com/ophub/fnnas"
+description: "Support Amlogic, Rockchip and Allwinner boxes."
+inputs:
+  # Select build target
+  build_target:
+    description: "Select build target: fnnas / kernel"
+    required: false
+    default: "fnnas"
+  # For build fnnas -----
+  fnnas_path:
+    description: "Set fnnas arm64 file path."
+    required: false
+    default: ""
+  fnnas_board:
+    description: "Select device board."
+    required: false
+    default: "all"
+  kernel_repo:
+    description: "Select kernel repository."
+    required: false
+    default: "ophub/fnnas"
+  fnnas_kernel:
+    description: "Select kernel version."
+    required: false
+    default: "6.1.y_6.12.y"
+  auto_kernel:
+    description: "Auto use the latest kernel."
+    required: false
+    default: "true"
+  fnnas_size:
+    description: "Set the rootfs size(Unit: MiB)."
+    required: false
+    default: ""
+  builder_name:
+    description: "Set fnnas builder signature."
+    required: false
+    default: ""
+  # For compile kernel -----
+  debs_repo:
+    description: "Set fnnas debs repository."
+    required: false
+    default: "ophub/fnnas"
+  debs_version:
+    description: "Set fnnas debs version."
+    required: false
+    default: "6.12.y"
+  debs_install:
+    description: "Install kernel debs files."
+    required: false
+    default: "none"
+  dtbs_install:
+    description: "Install kernel dtbs files."
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        cd ${{ github.action_path }}
+        echo -e "ophub package actions path: [ ${PWD} ]"
+
+        # Get build target
+        build_target="${{ inputs.build_target }}"
+        [[ -z "${build_target}" ]] && build_target="fnnas"
+
+        # Get fnnas file input parameters, set work directory
+        fnnas_filename="${{ inputs.fnnas_path }}"
+        fnnas_savefile="${fnnas_filename##*/}"
+        fnnas_savepath="fnnas-arm64"
+        fnnas_outpath="fnnas/out"
+        echo -e "Get fnnas file input parameters: [ ${fnnas_filename} ]"
+        [[ -z "${fnnas_filename}" ]] && echo -e "The [ fnnas_path ] variable must be specified." && exit 1
+        [[ -d "${fnnas_savepath}" ]] || mkdir -p ${fnnas_savepath}
+        [[ -d "${fnnas_outpath}" ]] || mkdir -p ${fnnas_outpath}
+
+        # Download or copy fnnas file
+        if [[ "${fnnas_filename}" =~ ^http ]]; then
+            echo -e "Download file: [ ${fnnas_filename} ]"
+            curl -fsSL "${fnnas_filename}" -o "${fnnas_savepath}/${fnnas_savefile}"
+        else
+            if [[ -z "$(ls ${fnnas_savepath}/${fnnas_savefile} 2>/dev/null)" ]]; then
+                echo -e "Copy fnnas rootfs file: [ ${fnnas_filename} ]"
+                if [[ "${fnnas_filename}" =~ ^/ ]]; then
+                    cp -vf ${fnnas_filename} ${fnnas_savepath}/ || true
+                else
+                    cp -vf ${{ github.workspace }}/${fnnas_filename} ${fnnas_savepath}/ || true
+                fi
+            else
+                echo -e "The [ ${fnnas_savepath}/${fnnas_savefile} ] file already exists, skipping."
+            fi
+        fi
+        sync
+        echo -e "About the [ ${fnnas_savepath} ] directory: \n$(ls -lh ${fnnas_savepath} 2>/dev/null)"
+
+        # Verify fnnas file format
+        cd ${fnnas_savepath}
+        echo -e "Check the fnnas file format..."
+        down_file="$(ls -l *.img* 2>/dev/null | grep "^-" | awk '{print $9}' | sort -u | head -n 1)"
+        if [[ -n "${down_file}" ]]; then
+            echo -e "Selected fnnas file: [ ${down_file} ]"
+        else
+            echo -e "The fnnas file is invalid."
+            exit 1
+        fi
+
+        # Decompress fnnas file
+        [[ "${down_file:0-7}" == ".img.gz" ]] && gzip -df ${down_file} 2>/dev/null && sync
+        [[ "${down_file:0-7}" == ".img.xz" ]] && xz -d ${down_file} 2>/dev/null && sync
+        [[ "${down_file:0-4}" == ".zip" ]] && unzip -o ${down_file} 2>/dev/null && sync
+        echo -e "fnnas file: \n$(ls -lh *.img 2>/dev/null)"
+
+        if [[ "${build_target}" == "fnnas" ]]; then
+            echo -e "Start rebuilding fnnas..."
+
+            cd ${{ github.action_path }}
+            echo -e "Start to make fnnas..."
+            
+            # The renas script should be in the current directory
+            # If not, check multiple locations including the repository root
+            if [[ ! -f ./renas ]]; then
+                echo -e "Looking for renas script..."
+                
+                # Define search locations
+                search_locations=(
+                    "./renas"  # Current directory first
+                    "../renas"  # Parent directory
+                    "${{ github.workspace }}/renas"  # GitHub workspace
+                    "/home/runner/work/${{ github.repository }}/main/renas"  # Repository root
+                    "/home/runner/work/${{ github.repository }}/${{ github.ref_name }}/renas"  # Branch-specific root
+                    "/home/runner/work/${{ github.repository }}/renas"  # Repository root alternative
+                    "./fnnas/renas"  # fnnas subdirectory
+                    "/builder/renas"  # Builder directory
+                    "/home/runner/work/fnnas/renas"  # Common workflow path
+                )
+                
+                found=false
+                for location in "${search_locations[@]}"; do
+                    if [[ -f "$location" ]]; then
+                        # Extract directory from the location
+                        dir="$(dirname "$location")"
+                        cp -vf "$location" ./renas
+                        # Check if rekernel exists in the same directory
+                        if [[ -f "$dir/rekernel" ]]; then
+                            cp -vf "$dir/rekernel" ./rekernel
+                        else
+                            echo -e "Warning: rekernel not found in $dir, searching separately..."
+                            # Search for rekernel in all locations
+                            for rekernel_loc in "${search_locations[@]}"; do
+                                rekernel_full="$(dirname "$rekernel_loc")/rekernel"
+                                if [[ -f "$rekernel_full" ]]; then
+                                    cp -vf "$rekernel_full" ./rekernel
+                                    break
+                                fi
+                            done
+                        fi
+                        # Always make scripts executable, regardless of original permissions
+                        chmod +x ./renas ./rekernel
+                        echo "Found in: $location"
+                        found=true
+                        break
+                    fi
+                done
+                
+                if [[ $found == false ]]; then
+                    echo -e "Error: renas script not found!"
+                    echo -e "Searched in:"
+                    for location in "${search_locations[@]}"; do
+                        echo "  - $location"
+                    done
+                    exit 1
+                fi
+            else
+                # If renas already exists, ensure it's executable
+                chmod +x ./renas ./rekernel
+            fi
+            
+            make_command=""
+            [[ -n "${{ inputs.fnnas_board }}" ]] && make_command="${make_command} -b ${{ inputs.fnnas_board }}"
+            [[ -n "${{ inputs.kernel_repo }}" ]] && make_command="${make_command} -r ${{ inputs.kernel_repo }}"
+            [[ -n "${{ inputs.fnnas_kernel }}" ]] && make_command="${make_command} -k ${{ inputs.fnnas_kernel }}"
+            [[ -n "${{ inputs.auto_kernel }}" ]] && make_command="${make_command} -a ${{ inputs.auto_kernel }}"
+            [[ -n "${{ inputs.fnnas_size }}" ]] && make_command="${make_command} -s ${{ inputs.fnnas_size }}"
+            [[ -n "${{ inputs.builder_name }}" ]] && make_command="${make_command} -n ${{ inputs.builder_name }}"
+            read -r -a make_args <<< "${make_command}"
+            sudo ./renas "${make_args[@]}"
+
+        elif [[ "${build_target}" == "kernel" ]]; then
+            echo -e "Start to make fnnas kernel..."
+
+            # Prepare output directory
+            kernel_outpath="fnnas/out"
+            [[ -d "${kernel_outpath}" ]] || mkdir -p ${kernel_outpath}
+
+            cd ${{ github.action_path }}
+            make_command=""
+            [[ -n "${{ inputs.debs_repo }}" ]] && make_command="${make_command} -r ${{ inputs.debs_repo }}"
+            [[ -n "${{ inputs.debs_version }}" ]] && make_command="${make_command} -k ${{ inputs.debs_version }}"
+            [[ -n "${{ inputs.debs_install }}" ]] && make_command="${make_command} -e ${{ inputs.debs_install }}"
+            [[ -n "${{ inputs.dtbs_install }}" ]] && make_command="${make_command} -t ${{ inputs.dtbs_install }}"
+            read -r -a make_args <<< "${make_command}"
+            sudo ./rekernel "${make_args[@]}"
+
+        else
+            echo -e "Please select a build target: fnnas / kernel"
+            exit 1
+        fi
+
+        # Output environment variables
+        cd ${{ github.action_path }}
+        echo -e "Output environment variables."
+        echo "PACKAGED_OUTPUTPATH=${PWD}/${fnnas_outpath}" >> ${GITHUB_ENV}
+        echo "PACKAGED_OUTPUTDATE=$(date +"%m.%d.%H%M")" >> ${GITHUB_ENV}
+        echo "PACKAGED_STATUS=success" >> ${GITHUB_ENV}
+        echo -e "PACKAGED_OUTPUTPATH: ${PWD}/${fnnas_outpath}"
+        echo -e "PACKAGED_OUTPUTDATE: $(date +"%m.%d.%H%M")"
+        echo -e "PACKAGED_STATUS: success"
+        echo -e "PACKAGED_OUTPUTPATH files list: \n$(ls -lh ${PWD}/${fnnas_outpath}/ 2>/dev/null)"
+
+branding:
+  icon: "terminal"
+  color: "gray-dark"
