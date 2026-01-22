@@ -121,6 +121,25 @@ runs:
 
             cd ${{ github.action_path }}
             echo -e "Start to make fnnas..."
+            
+            # Check if renas script exists, if not, try to find it
+            if [[ ! -x ./renas ]]; then
+                echo -e "Looking for renas script..."
+                # Try to find renas script in common locations
+                if [[ -x ${{ github.workspace }}/renas ]]; then
+                    cp -vf ${{ github.workspace }}/renas ./renas
+                    cp -vf ${{ github.workspace }}/rekernel ./rekernel
+                    chmod +x ./renas ./rekernel
+                elif [[ -x /builder/renas ]]; then
+                    cp -vf /builder/renas ./renas
+                    cp -vf /builder/rekernel ./rekernel
+                    chmod +x ./renas ./rekernel
+                else
+                    echo -e "Error: renas script not found!"
+                    exit 1
+                fi
+            fi
+            
             make_command=""
             [[ -n "${{ inputs.fnnas_board }}" ]] && make_command="${make_command} -b ${{ inputs.fnnas_board }}"
             [[ -n "${{ inputs.kernel_repo }}" ]] && make_command="${make_command} -r ${{ inputs.kernel_repo }}"
